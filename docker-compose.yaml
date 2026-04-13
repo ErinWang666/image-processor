@@ -11,25 +11,45 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    restart: unless-stopped
 
-  # --- 新增: MinIO (模拟 AWS S3) ---
   minio:
-    image: minio/minio:RELEASE.2024-01-31T20-20-33Z # 指定一个稳定版本
+    image: minio/minio:RELEASE.2024-01-31T20-20-33Z
     ports:
-      - "9000:9000" # API 端口 (代码连这个)
-      - "9001:9001" # 控制台端口 (浏览器连这个)
+      - "9000:9000"
+      - "9001:9001"
     environment:
-      MINIO_ROOT_USER: admin # 相当于 AWS Access Key
-      MINIO_ROOT_PASSWORD: password # 相当于 AWS Secret Key
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: password
     command: server /data --console-address ":9001"
     volumes:
       - minio_data:/data
+    restart: unless-stopped
+
+  # --- ElasticMQ API: SQS 模拟器核心 ---
+  elasticmq:
+    image: softwaremill/elasticmq:latest
+    container_name: ip_elasticmq
+    ports:
+      - "9324:9324" # Go SDK API 访问端口
+      - "3000:3000" # 🚨 关键改动：因为网络合并，UI 的端口必须挪到宿主容器这里暴露！
+    restart: unless-stopped
+
+  # --- ElasticMQ UI: 可视化控制台 ---
+  elasticmq-ui:
+    image: softwaremill/elasticmq-ui:latest
+    container_name: ip_elasticmq_ui
+    network_mode: "service:elasticmq" # 🚨 核心黑科技：让 UI 容器寄生到 API 容器的网络中
+    depends_on:
+      - elasticmq
+    restart: unless-stopped
 
 volumes:
   postgres_data:
-  minio_data: # --- 新增: 确保 MinIO 数据持久化 ---
+  minio_data:
