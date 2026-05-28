@@ -1,41 +1,80 @@
 # Image Processor
 
-A high-performance, asynchronous image processing service built with Go, focusing on reliability and horizontal scalability.
+A production-ready, asynchronous image processing service built with Go.
+Designed with clean architecture, distributed systems patterns, and production reliability in mind.
 
-## 🚀 Current Project Status
+## ✅ What's Implemented
 
-The core architecture and infrastructure are now in place. The system successfully implements the **Transactional Outbox Pattern** to ensure atomicity between database updates and message dispatching.
+| Feature | Pattern / Tech | Why |
+|---------|---------------|-----|
+| Async image processing | **Transactional Outbox + SQS** | Atomically dispatch tasks without losing messages |
+| Duplicate prevention | **Redis Distributed Lock** | One image processed by exactly one worker |
+| Cache layer | **Redis Cache-Aside** + singleflight | Reduce DB load, prevent cache stampede |
+| Rate limiting | **Redis Token Bucket (Lua)** | Per-IP distributed rate limiting |
+| AI tagging | **Google Gemini Vision** | Auto-tag images on completion |
+| Object storage | **MinIO (S3-compatible)** | Presigned URL upload flow |
 
-### Key Features Implemented:
+## 🧪 Testing
 
-- **Asynchronous Processing**: Decoupled image processing tasks using **AWS SQS** (via ElasticMQ) to handle heavy workloads without blocking the API.
-- **Reliable Messaging**: Implemented the **Transactional Outbox pattern** to guarantee "at-least-once" message delivery even during system failures.
-- **Distributed Locking**: Integrated **Redis Distributed Locks** to prevent duplicate processing of the same image by multiple workers.
-- **Object Storage**: Direct integration with **MinIO (S3-compatible)** for secure and scalable image storage.
-- **AI Integration**: Automatic image tagging and analysis powered by **Google Gemini AI**.
-- **Containerized Infrastructure**: Full local environment orchestration via **Docker Compose** (PostgreSQL, Redis, MinIO, ElasticMQ).
+```bash
+# Unit tests (Usecase + HTTP Handler, no external services needed)
+go test ./internal/usecase/... ./internal/interface/... -v
+
+# Integration tests (requires Docker)
+go test ./internal/infrastructure/persistence/... -v
+```
+
+| Layer | Type | Count |
+|-------|------|-------|
+| Usecase | Unit (gomock) | 8 |
+| HTTP Handler | Unit (httptest + gomock) | 6 |
+| PostgreSQL Repository | Integration (testcontainers) | 5 |
 
 ## 🛠️ Tech Stack
 
-- **Language**: Go (Golang)
-- **Database**: PostgreSQL
-- **Cache/Lock**: Redis
+- **Language**: Go
+- **Database**: PostgreSQL (GORM)
+- **Cache / Lock / Rate Limit**: Redis
 - **Message Queue**: AWS SQS (ElasticMQ for local dev)
-- **Storage**: MinIO (S3)
+- **Storage**: MinIO (S3-compatible)
 - **AI**: Google Gemini Pro Vision
+- **Testing**: gomock, testify, testcontainers-go
 
-## 🚦 Getting Started (Local Dev)
+## 🏗️ Architecture
 
-1. **Infrastructure**: Spin up the required services:
-   ```bash
-   docker-compose up -d
-   ```
-2. **Environment**: Configure your .env file with your GEMINI_API_KEY.
-3. **Run API & Worker**:
-   ```bash
-   go run cmd/server/main.go
-   ```
+```
+HTTP Request
+    │
+    ▼
+RateLimitMiddleware (Redis Token Bucket)
+    │
+    ▼
+Handler → Usecase → CachedRepository ──► Redis
+                          │
+                          └──────────────► PostgreSQL
+                    │
+                    ▼
+              Outbox Relay → SQS → Worker → AI Tagging → MinIO
+```
 
-## 🏗️ Architecture Overview
+The service follows **clean architecture**: Domain → Usecase → Infrastructure, with all dependencies flowing inward via interfaces.
 
-The system follows a modular design where the API stores the initial state and an "Outbox" message in a single transaction. A background relay service then picks up these messages and pushes them to SQS for Worker consumption.
+## 🚦 Local Development
+
+```bash
+# 1. Start infrastructure (PostgreSQL, Redis, MinIO, ElasticMQ)
+docker-compose up -d
+
+# 2. Set your API key
+cp .env.example .env   # fill in GEMINI_API_KEY
+
+# 3. Run the server
+go run cmd/server/main.go
+```
+
+## 🔑 Key Design Decisions
+
+- **Decorator Pattern** for the cache layer: `CachedRepository` wraps `PostgresRepository`, both implement `ImageRepository`. Zero changes to Usecase layer.
+- **singleflight** prevents cache stampede: when a hot key expires, only 1 DB query fires regardless of concurrent requests.
+- **Lua script** for rate limiting: ensures "read token → decrement → write" is atomic across multiple service instances.
+- **Optimistic locking** in `UpdateResult`: `WHERE status = 'PROCESSING'` prevents a completed task from being overwritten by a slow duplicate worker.

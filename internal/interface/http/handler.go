@@ -5,16 +5,15 @@ import (
 	"time"
 
 	"github.com/ErinWang666/image-processor/internal/domain"
-	"github.com/ErinWang666/image-processor/internal/usecase"
 	"github.com/gin-gonic/gin"
 )
 
 type ImageHandler struct {
-	usecase *usecase.ImageUsecase
+	usecase ImageUsecase // ← 改成接口
 	storage domain.Storage
 }
 
-func NewImageHandler(u *usecase.ImageUsecase, s domain.Storage) *ImageHandler {
+func NewImageHandler(u ImageUsecase, s domain.Storage) *ImageHandler {
 	return &ImageHandler{
 		usecase: u,
 		storage: s,
@@ -63,7 +62,7 @@ type ConfirmRequest struct {
 // API 2: 确认上传 (发队列唤醒 Worker)
 func (h *ImageHandler) HandleConfirmRequest(c *gin.Context) {
 	var req ConfirmRequest
-	
+
 	// 解析前端传过来的 JSON 数据
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body. 'image_id' is required."})
@@ -92,23 +91,40 @@ func (h *ImageHandler) HandleGetImage(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"image_id":      img.ID,
-		"status":        img.Status,
-		"thumbnail_url": img.ThumbnailURL,
-		"tags":          img.Tags, // <-- 就是这行！把标签吐给前端
-	})
+	// 1. 基础响应：不管什么状态，必须返回 ID 和 状态
+	response := gin.H{
+		"image_id": img.ID,
+		"status":   img.Status,
+	}
+
+	// 2. 只有当处理成功时，才返回给前端展示链接和 AI 标签
+	if img.Status == domain.StatusCompleted {
+		response["display_url"] = img.ThumbnailURL // 🌟 换个高级点的 Key 给前端
+		response["tags"] = img.Tags
+	} else if img.Status == domain.StatusFailed {
+		response["error_message"] = "Image processing failed"
+	}
+
+	c.JSON(http.StatusOK, response)
 }
 
 // SetupRouter 配置路由
-func SetupRouter(handler *ImageHandler) *gin.Engine {
+//
+// 为什么把 rateLimiter 传进来而不是在 main.go 里直接用 router.Use()？
+// → 路由的组织结构（哪些路径需要限流、哪些不需要）属于接口层的职责
+//
+//	比如将来可能要给 /metrics 端点豁免限流，在这里管比在 main.go 里管更清晰
+func SetupRouter(handler *ImageHandler, rateLimiter domain.RateLimiter) *gin.Engine {
 	r := gin.Default()
 
 	api := r.Group("/api/v1")
+	// 对 /api/v1 下的所有路由应用限流中间件
+	// Use() 的执行顺序是注册顺序，所以先经过限流检查，再到达 Handler
+	api.Use(RateLimitMiddleware(rateLimiter))
 	{
 		api.POST("/images/upload", handler.HandleUploadRequest)
-		api.POST("/images/confirm", handler.HandleConfirmRequest) // --- 新增的路由 ---
-		api.GET("/images/:id", handler.HandleGetImage) // --- 新增的 GET 路由 ---
+		api.POST("/images/confirm", handler.HandleConfirmRequest)
+		api.GET("/images/:id", handler.HandleGetImage)
 	}
 
 	return r

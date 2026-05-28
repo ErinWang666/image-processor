@@ -3,6 +3,7 @@ package queue
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	"github.com/aws/aws-sdk-go-v2/service/sqs/types" // 🌟 新增：用于获取队列 ARN
 )
 
 type SQSQueue struct {
@@ -17,13 +19,12 @@ type SQSQueue struct {
 	queueURL string
 }
 
-// NewSQSQueue 构造函数，自动连接 LocalStack 并创建队列
+// NewSQSQueue 构造函数，自动连接 ElasticMQ 并创建主队列 + 死信队列 (DLQ)
 func NewSQSQueue(ctx context.Context, queueName string) (domain.Queue, error) {
-	// 1. 加载 AWS 配置，并强行将地址指向本地 LocalStack (4566 端口)
 	customResolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
 		return aws.Endpoint{
 			PartitionID:   "aws",
-			URL:           "http://127.0.0.1:9324", // 🌟 改成 ElasticMQ 的端口 9324
+			URL:           "http://127.0.0.1:9324",
 			SigningRegion: "us-east-1",
 		}, nil
 	})
@@ -41,19 +42,43 @@ func NewSQSQueue(ctx context.Context, queueName string) (domain.Queue, error) {
 
 	client := sqs.NewFromConfig(cfg)
 
-	// 2. 自动创建队列 (如果不存在的话)
-	createOutput, err := client.CreateQueue(ctx, &sqs.CreateQueueInput{
-		QueueName: aws.String(queueName),
+	// 🌟 1. 先创建死信队列 (DLQ)
+	dlqName := queueName + "_dlq"
+	dlqOutput, err := client.CreateQueue(ctx, &sqs.CreateQueueInput{
+		QueueName: aws.String(dlqName),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create queue: %v", err)
+		return nil, fmt.Errorf("failed to create DLQ: %v", err)
 	}
 
-	log.Printf("🌩️ [SQS] Connected to LocalStack Queue: %s", *createOutput.QueueUrl)
+	// 🌟 2. 获取 DLQ 的 ARN (Amazon Resource Name，唯一标识符)
+	dlqAttr, err := client.GetQueueAttributes(ctx, &sqs.GetQueueAttributesInput{
+		QueueUrl:       dlqOutput.QueueUrl,
+		AttributeNames: []types.QueueAttributeName{types.QueueAttributeNameQueueArn},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get DLQ ARN: %v", err)
+	}
+	dlqArn := dlqAttr.Attributes[string(types.QueueAttributeNameQueueArn)]
+
+	// 🌟 3. 创建主队列，并绑定 RedrivePolicy (重试策略：失败 3 次就扔进 DLQ)
+	redrivePolicy := fmt.Sprintf(`{"deadLetterTargetArn":"%s","maxReceiveCount":"3"}`, dlqArn)
+	mainOutput, err := client.CreateQueue(ctx, &sqs.CreateQueueInput{
+		QueueName: aws.String(queueName),
+		Attributes: map[string]string{
+			"RedrivePolicy": redrivePolicy,
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create main queue: %v", err)
+	}
+
+	log.Printf("🌩️ [SQS] Connected to Main Queue: %s", *mainOutput.QueueUrl)
+	log.Printf("🌩️ [SQS] DLQ Configured at: %s (Max retries: 3)", *dlqOutput.QueueUrl)
 
 	return &SQSQueue{
 		client:   client,
-		queueURL: *createOutput.QueueUrl,
+		queueURL: *mainOutput.QueueUrl,
 	}, nil
 }
 
@@ -90,6 +115,11 @@ func (s *SQSQueue) Subscribe(ctx context.Context, topic string) (<-chan domain.T
 			})
 
 			if err != nil {
+				// 🌟 核心：如果是因为系统正在关机导致的 Context 取消，就退出循环
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					log.Println("🛑 [SQS Subscriber] Context canceled, gracefully stopping polling...")
+					break
+				}
 				log.Printf("❌ [SQS] Receive error: %v", err)
 				continue
 			}
