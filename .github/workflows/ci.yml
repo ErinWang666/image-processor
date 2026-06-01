@@ -51,7 +51,7 @@ jobs:
       - name: Run golangci-lint
         run: |
           go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
-          golangci-lint run ./...
+          golangci-lint run ./... --timeout 5m
 
       # 4. 跑所有测试
       # 注意：集成测试（testcontainers）需要 Docker
