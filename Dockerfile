@@ -1,6 +1,6 @@
 # ---- 构建阶段 ----
 # 用完整的 Go 镜像来编译代码
-FROM golang:1.24-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
 
