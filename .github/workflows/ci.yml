@@ -10,7 +10,7 @@ on:
 jobs:
   ci:
     name: Lint, Test & Build
-    runs-on: ubuntu-latest  # 在 GitHub 提供的 Ubuntu 服务器上跑
+    runs-on: ubuntu-latest # 在 GitHub 提供的 Ubuntu 服务器上跑
 
     # 声明集成测试需要的服务
     # GitHub 会在跑测试之前自动启动这些 Docker 容器
@@ -44,13 +44,14 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod  # 自动读取 go.mod 里的版本号
+          go-version-file: go.mod # 自动读取 go.mod 里的版本号
 
       # 3. 代码风格检查（golangci-lint）
+      # 用 go install 构建，确保和项目 Go 版本一致
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          version: latest
+        run: |
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+          golangci-lint run ./...
 
       # 4. 跑所有测试
       # 注意：集成测试（testcontainers）需要 Docker
