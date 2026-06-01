@@ -1,0 +1,22 @@
+linters:
+  enable:
+    - errcheck    # 检查 error 是否被处理
+    - govet       # Go 官方静态分析
+    - ineffassign # 检查无效赋值
+    - staticcheck # 高质量静态分析
+
+  disable:
+    - typecheck   # 如果有 mock 生成的代码，typecheck 有时会误报
+
+linters-settings:
+  errcheck:
+    # json.Unmarshal 的 error 在测试里经常被忽略，允许
+    exclude-functions:
+      - encoding/json.Unmarshal
+
+issues:
+  # 生成的 mock 文件不检查
+  exclude-rules:
+    - path: mocks/
+      linters:
+        - all

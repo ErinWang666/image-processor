@@ -1,0 +1,68 @@
+name: CI
+
+# 触发条件：push 到任何分支，或者有 PR 提向 main 分支
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    name: Lint, Test & Build
+    runs-on: ubuntu-latest  # 在 GitHub 提供的 Ubuntu 服务器上跑
+
+    # 声明集成测试需要的服务
+    # GitHub 会在跑测试之前自动启动这些 Docker 容器
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: testdb
+        ports:
+          - 5432:5432
+        # 等 PostgreSQL 真正就绪才继续
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+
+    steps:
+      # 1. 拉取代码
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. 安装 Go
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod  # 自动读取 go.mod 里的版本号
+
+      # 3. 代码风格检查（golangci-lint）
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
+      # 4. 跑所有测试
+      # 注意：集成测试（testcontainers）需要 Docker
+      # GitHub Runner 自带 Docker，但 testcontainers 启动的是新容器
+      # 所以集成测试用 services 里的 postgres，不用 testcontainers
+      - name: Run tests
+        run: go test ./... -v -timeout 120s
+        env:
+          # 给集成测试传数据库地址
+          # 但我们的集成测试用 testcontainers 自己启动容器，所以这里是备用
+          CGO_ENABLED: 0
+
+      # 5. 验证 Docker 镜像能正常构建
+      - name: Build Docker image
+        run: docker build -t image-processor:ci .
