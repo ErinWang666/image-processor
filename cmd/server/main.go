@@ -63,9 +63,9 @@ func main() {
 
 	// 4.5 初始化 Gemini AI
 	log.Println("🧠 [Step 4.5] Connecting to Gemini AI...")
-	geminiKey := os.Getenv("GEMINI_API_KEY") 
+	geminiKey := os.Getenv("GEMINI_API_KEY")
 	if geminiKey == "" {
-		geminiKey = "your_gemini_api_key_here" 
+		geminiKey = "your_gemini_api_key_here"
 	}
 	aiClient, err := ai.NewGeminiService(context.Background(), geminiKey)
 	if err != nil {
@@ -74,7 +74,9 @@ func main() {
 
 	// 5. 自动迁移
 	log.Println("🛠️ [Step 5] Migrating database schema...")
-	db.AutoMigrate(&domain.Image{}, &domain.OutboxMessage{})
+	if err := db.AutoMigrate(&domain.Image{}, &domain.OutboxMessage{}); err != nil {
+		log.Fatalf("failed to migrate database: %v", err)
+	}
 
 	// 6. 依赖注入
 	// 6.1 创建底层 Postgres Repo（直接操作数据库）
@@ -86,7 +88,7 @@ func main() {
 	// 6.3 用装饰器包装：CachedRepository 在 GetByID 前先查 Redis，
 	//     在 UpdateResult 后删 Redis，对 Usecase 层完全透明
 	repo := persistence.NewCachedRepository(postgresRepo, redisCache)
-	
+
 	log.Println("🌩️ [Step 6] Initializing AWS SQS Queue (ElasticMQ)...")
 	msgQueue, err := queue.NewSQSQueue(context.Background(), "image_processing_queue")
 	if err != nil {
@@ -110,7 +112,7 @@ func main() {
 		log.Fatalf("❌ Failed to subscribe to SQS queue: %v", err)
 	}
 
-	const WorkerCount = 3 
+	const WorkerCount = 3
 	for i := 0; i < WorkerCount; i++ {
 		go func(workerID int) {
 			log.Printf("👷 SQS Worker %d started", workerID)

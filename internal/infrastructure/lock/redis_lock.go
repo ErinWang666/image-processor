@@ -31,7 +31,8 @@ func (r *RedisLocker) Acquire(ctx context.Context, key string, ttl time.Duration
 	token := uuid.New().String()
 
 	// 2. 尝试加锁，把 Token 存进去
-	success, err := r.client.SetNX(ctx, key, token, ttl).Result()
+	success, err := r.client.SetNX(ctx, key, token, ttl).Result() //nolint:staticcheck
+
 	if err != nil {
 		return "", false, err // Redis 宕机等系统故障
 	}

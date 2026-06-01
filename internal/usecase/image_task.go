@@ -52,10 +52,10 @@ func (u *ImageUsecase) CreateTask(ctx context.Context, img *domain.Image) error 
 // 现在的逻辑：同生共死，只写数据库，不发队列
 func (u *ImageUsecase) ConfirmTask(ctx context.Context, imageID string) error {
 	log.Printf("🚀 [Usecase] Confirming task and committing to Outbox: %s", imageID)
-	
+
 	taskPayload := domain.TaskPayload{
 		ImageID:   imageID,
-		UserID:    "user-999", 
+		UserID:    "user-999",
 		EventType: "image_uploaded",
 	}
 
@@ -78,7 +78,7 @@ func (u *ImageUsecase) ProcessImage(ctx context.Context, task domain.TaskPayload
 	// 🛡️ 防线一：尝试获取 Redis 分布式锁
 	// ==========================================
 	lockKey := fmt.Sprintf("task:lock:%s", task.ImageID)
-	
+
 	// 🌟 修改点 1：接收返回的 token
 	token, acquired, err := u.locker.Acquire(ctx, lockKey, 10*time.Minute)
 	if err != nil {
@@ -88,11 +88,11 @@ func (u *ImageUsecase) ProcessImage(ctx context.Context, task domain.TaskPayload
 		log.Printf("⚠️ [Worker] Task %s is already being processed. Dropping duplicate message.", task.ImageID)
 		return nil
 	}
-	
-	// 🌟 修改点 2：在 defer 释放锁时，必须交出这把钥匙 (token)
-	defer u.locker.Release(ctx, lockKey, token)
-	// ==========================================
 
+	// 🌟 修改点 2：在 defer 释放锁时，必须交出这把钥匙 (token)
+	defer u.locker.Release(ctx, lockKey, token) //nolint:errcheck
+
+	// ==========================================
 
 	if err := u.repo.UpdateStatus(ctx, task.ImageID, domain.StatusProcessing); err != nil {
 		return fmt.Errorf("failed to update status: %w", err)
@@ -102,7 +102,10 @@ func (u *ImageUsecase) ProcessImage(ctx context.Context, task domain.TaskPayload
 	fileKey := task.ImageID + ".jpg"
 	fileStream, err := u.storage.Download(ctx, "images", fileKey)
 	if err != nil {
-		u.repo.UpdateStatus(ctx, task.ImageID, domain.StatusFailed)
+		if updateErr := u.repo.UpdateStatus(ctx, task.ImageID, domain.StatusFailed); updateErr != nil {
+			log.Printf("failed to update status to FAILED: %v", updateErr)
+		}
+
 		return fmt.Errorf("failed to download from minio: %w", err)
 	}
 	defer fileStream.Close()
@@ -111,7 +114,10 @@ func (u *ImageUsecase) ProcessImage(ctx context.Context, task domain.TaskPayload
 	log.Println("⚙️ [Image Processor] Decoding image...")
 	srcImage, err := imaging.Decode(fileStream)
 	if err != nil {
-		u.repo.UpdateStatus(ctx, task.ImageID, domain.StatusFailed)
+		if updateErr := u.repo.UpdateStatus(ctx, task.ImageID, domain.StatusFailed); updateErr != nil {
+			log.Printf("failed to update status to FAILED: %v", updateErr)
+		}
+
 		return fmt.Errorf("failed to decode image: %w", err)
 	}
 
@@ -123,7 +129,10 @@ func (u *ImageUsecase) ProcessImage(ctx context.Context, task domain.TaskPayload
 	buf := new(bytes.Buffer)
 	err = imaging.Encode(buf, dstImage, imaging.JPEG)
 	if err != nil {
-		u.repo.UpdateStatus(ctx, task.ImageID, domain.StatusFailed)
+		if updateErr := u.repo.UpdateStatus(ctx, task.ImageID, domain.StatusFailed); updateErr != nil {
+			log.Printf("failed to update status to FAILED: %v", updateErr)
+		}
+
 		return fmt.Errorf("failed to encode processed image: %w", err)
 	}
 
@@ -140,18 +149,20 @@ func (u *ImageUsecase) ProcessImage(ctx context.Context, task domain.TaskPayload
 	// 5. 将处理好的新图片回传到 MinIO
 	processedKey := "processed/" + task.ImageID + "-thumb.jpg"
 	log.Printf("📤 [Image Processor] Uploading processed image to MinIO as: %s", processedKey)
-	
+
 	fileReader := bytes.NewReader(buf.Bytes())
 	err = u.storage.Upload(ctx, "images", processedKey, fileReader)
 	if err != nil {
-		u.repo.UpdateStatus(ctx, task.ImageID, domain.StatusFailed)
+		if updateErr := u.repo.UpdateStatus(ctx, task.ImageID, domain.StatusFailed); updateErr != nil {
+			log.Printf("failed to update status to FAILED: %v", updateErr)
+		}
 		return fmt.Errorf("failed to upload processed image: %w", err)
 	}
 
 	// 6. --- 终极闭环：将新图片的 URL 存入数据库 ---
 	finalURL := fmt.Sprintf("http://localhost:9000/images/%s", processedKey)
 	log.Printf("💾 [Usecase] Saving result to DB. Thumbnail URL: %s", finalURL)
-	
+
 	// ==========================================
 	// 🛡️ 防线二：底层带有状态卫哨的乐观锁更新
 	// ==========================================

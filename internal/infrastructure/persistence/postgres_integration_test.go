@@ -34,7 +34,7 @@ func TestMain(m *testing.M) {
 		fmt.Printf("failed to start postgres container: %v\n", err)
 		os.Exit(1)
 	}
-	defer pgContainer.Terminate(ctx)
+	defer pgContainer.Terminate(ctx) //nolint:errcheck
 
 	// 拿到容器的连接地址
 	dsn, err := pgContainer.ConnectionString(ctx, "sslmode=disable")

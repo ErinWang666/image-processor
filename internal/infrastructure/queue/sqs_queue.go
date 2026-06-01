@@ -21,6 +21,8 @@ type SQSQueue struct {
 
 // NewSQSQueue 构造函数，自动连接 ElasticMQ 并创建主队列 + 死信队列 (DLQ)
 func NewSQSQueue(ctx context.Context, queueName string) (domain.Queue, error) {
+	// AWS SDK v2 旧版 EndpointResolver，ElasticMQ 本地开发需要，生产环境用新版配置
+	//nolint:staticcheck
 	customResolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
 		return aws.Endpoint{
 			PartitionID:   "aws",
@@ -31,6 +33,7 @@ func NewSQSQueue(ctx context.Context, queueName string) (domain.Queue, error) {
 
 	cfg, err := config.LoadDefaultConfig(ctx,
 		config.WithRegion("us-east-1"),
+		//nolint:staticcheck
 		config.WithEndpointResolverWithOptions(customResolver),
 		config.WithCredentialsProvider(aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
 			return aws.Credentials{AccessKeyID: "test", SecretAccessKey: "test"}, nil

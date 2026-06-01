@@ -49,7 +49,7 @@ func (r *CachedRepository) GetByID(ctx context.Context, id string) (*domain.Imag
 		if err := json.Unmarshal(data, &img); err != nil {
 			// JSON 损坏，删掉脏数据，回退到 DB
 			log.Printf("⚠️ [Cache] Corrupted cache, falling through to DB: %v", err)
-			r.cache.Delete(ctx, cacheKey)
+			_ = r.cache.Delete(ctx, cacheKey)
 		} else {
 			return &img, nil
 		}
@@ -97,7 +97,7 @@ func (r *CachedRepository) UpdateResult(ctx context.Context, id string, status d
 func (r *CachedRepository) UpdateStatus(ctx context.Context, id string, status domain.ImageStatus) error {
 	err := r.inner.UpdateStatus(ctx, id, status)
 	if err == nil {
-		r.cache.Delete(ctx, cacheKeyPrefix+id)
+		_ = r.cache.Delete(ctx, cacheKeyPrefix+id)
 	}
 	return err
 }
@@ -105,7 +105,7 @@ func (r *CachedRepository) UpdateStatus(ctx context.Context, id string, status d
 func (r *CachedRepository) UpdateStatusWithOutbox(ctx context.Context, id string, status domain.ImageStatus, topic string, payload interface{}) error {
 	err := r.inner.UpdateStatusWithOutbox(ctx, id, status, topic, payload)
 	if err == nil {
-		r.cache.Delete(ctx, cacheKeyPrefix+id)
+		_ = r.cache.Delete(ctx, cacheKeyPrefix+id)
 	}
 	return err
 }

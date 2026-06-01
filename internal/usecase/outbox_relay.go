@@ -41,7 +41,10 @@ func (u *ImageUsecase) processOutboxMessages(ctx context.Context) {
 		}
 
 		// 3. 发送成功，更新状态为 SENT
-		u.repo.MarkOutboxAsSent(ctx, msg.ID)
+		if err := u.repo.MarkOutboxAsSent(ctx, msg.ID); err != nil {
+			log.Printf("❌ [Outbox Relay] Failed to mark message %s as sent: %v", msg.ID, err)
+			continue
+		}
 		log.Printf("✅ [Outbox Relay] Message %s sent to queue", msg.ID)
 	}
 }
